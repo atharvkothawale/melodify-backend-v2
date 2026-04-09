@@ -7,8 +7,7 @@ const ytSearch = require('yt-search');
 const cors = require('cors');
 
 const app = express();
-const PORT = 5000;
-
+const PORT = process.env.PORT || 5000;
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 // Allow requests from any origin (useful when your frontend runs on a different port)
