@@ -2,10 +2,6 @@ const express = require('express');
 const ytdl = require('@distube/ytdl-core');
 const ytSearch = require('yt-search');
 const cors = require('cors');
-const https = require('https');
-
-const rawCookies = process.env.YOUTUBE_COOKIES ? JSON.parse(process.env.YOUTUBE_COOKIES) : [];
-const cookieString = rawCookies.map(c => `${c.name}=${c.value}`).join('; ');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -35,49 +31,42 @@ app.get('/search', async (req, res) => {
 
 // ─── Stream ───────────────────────────────────────────────────────────────────
 
-app.get('/stream', (req, res) => {
+app.get('/stream', async (req, res) => {
   const { videoId } = req.query;
   if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
-  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
+  if (!ytdl.validateID(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
 
-  const apiUrl = `https://invidious.privacyredirect.com/api/v1/videos/${videoId}`;
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-  https.get(apiUrl, (apiRes) => {
-    let data = '';
-
-    apiRes.on('data', (chunk) => {
-      data += chunk;
+  try {
+    // Get info first to find best audio format
+    const info = await ytdl.getInfo(url);
+    const format = ytdl.chooseFormat(info.formats, {
+      quality: 'highestaudio',
+      filter: 'audioonly',
     });
 
-    apiRes.on('end', () => {
-      try {
-        if (apiRes.statusCode !== 200) {
-          return res.status(apiRes.statusCode).json({ error: 'Failed to fetch video data from Invidious' });
-        }
+    if (!format) return res.status(500).json({ error: 'No audio format found' });
 
-        const json = JSON.parse(data);
-        
-        if (!json.adaptiveFormats || !Array.isArray(json.adaptiveFormats)) {
-          return res.status(500).json({ error: 'No adaptive formats found' });
-        }
+    res.setHeader('Content-Type', format.mimeType || 'audio/webm');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
-        const audioFormat = json.adaptiveFormats.find(f => f.type && f.type.startsWith('audio/'));
+    const stream = ytdl.downloadFromInfo(info, { format });
 
-        if (!audioFormat || !audioFormat.url) {
-          return res.status(500).json({ error: 'No audio format found' });
-        }
-
-        res.redirect(audioFormat.url);
-      } catch (err) {
-        console.error('Error parsing Invidious response:', err.message);
-        res.status(500).json({ error: 'Failed to parse video data' });
-      }
+    stream.on('error', (err) => {
+      console.error('Stream error:', err.message);
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+      else res.end();
     });
 
-  }).on('error', (err) => {
-    console.error('Invidious API request error:', err.message);
-    res.status(500).json({ error: 'Failed to request video data' });
-  });
+    req.on('close', () => stream.destroy());
+
+    stream.pipe(res);
+  } catch (err) {
+    console.error('Stream error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
