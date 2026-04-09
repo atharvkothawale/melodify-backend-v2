@@ -2,7 +2,7 @@
 // A simple Express server for searching and streaming YouTube audio
 
 const express = require('express');
-const ytDlpExec = require('yt-dlp-exec');
+const youtubedl = require('youtube-dl-exec');
 const ytSearch = require('yt-search');
 const cors = require('cors');
 const https = require('https');
@@ -73,8 +73,8 @@ app.get('/stream', async (req, res) => {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Step 1: Use yt-dlp-exec to get the direct audio CDN URL
-    const output = await ytDlpExec(videoUrl, {
+    // Step 1: Use youtube-dl-exec to get the direct audio CDN URL
+    const output = await youtubedl(videoUrl, {
       format: 'bestaudio/best',
       getUrl: true,
     });
