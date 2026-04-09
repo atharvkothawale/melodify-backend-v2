@@ -2,6 +2,7 @@ const express = require('express');
 const ytdl = require('@distube/ytdl-core');
 const ytSearch = require('yt-search');
 const cors = require('cors');
+const youtubedl = require('youtube-dl-exec');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -31,38 +32,30 @@ app.get('/search', async (req, res) => {
 
 // ─── Stream ───────────────────────────────────────────────────────────────────
 
-app.get('/stream', async (req, res) => {
+app.get('/stream', (req, res) => {
   const { videoId } = req.query;
   if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
-  if (!ytdl.validateID(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return res.status(400).json({ error: 'Invalid videoId' });
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Get info first to find best audio format
-    const info = await ytdl.getInfo(url);
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: 'highestaudio',
-      filter: 'audioonly',
-    });
+    const subprocess = youtubedl.exec(url, {
+      output: '-',
+      format: 'bestaudio'
+    }, { stdio: ['ignore', 'pipe', 'ignore'] });
 
-    if (!format) return res.status(500).json({ error: 'No audio format found' });
-
-    res.setHeader('Content-Type', format.mimeType || 'audio/webm');
+    res.setHeader('Content-Type', 'audio/webm');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
-    const stream = ytdl.downloadFromInfo(info, { format });
+    subprocess.stdout.pipe(res);
 
-    stream.on('error', (err) => {
-      console.error('Stream error:', err.message);
-      if (!res.headersSent) res.status(500).json({ error: err.message });
-      else res.end();
+    req.on('close', () => {
+      try {
+        subprocess.kill();
+      } catch (e) {}
     });
-
-    req.on('close', () => stream.destroy());
-
-    stream.pipe(res);
   } catch (err) {
     console.error('Stream error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
