@@ -2,18 +2,15 @@
 // A simple Express server for searching and streaming YouTube audio
 
 const express = require('express');
-const youtubedl = require('youtube-dl-exec');
+const ytdl = require('@distube/ytdl-core');
 const ytSearch = require('yt-search');
 const cors = require('cors');
-const https = require('https');
-const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
-// Allow requests from any origin (useful when your frontend runs on a different port)
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
@@ -60,8 +57,8 @@ app.get('/search', async (req, res) => {
  * GET /stream?videoId=dQw4w9WgXcQ
  *
  * Accepts a YouTube video ID via the `videoId` query parameter.
- * Uses yt-dlp-exec to get the direct CDN audio URL, then proxies
- * that audio stream through Node's built-in https module to the client.
+ * Uses @distube/ytdl-core to pipe the highest quality audio directly
+ * through this server to the client.
  */
 app.get('/stream', async (req, res) => {
   const videoId = req.query.videoId;
@@ -73,57 +70,51 @@ app.get('/stream', async (req, res) => {
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Step 1: Use youtube-dl-exec to get the direct audio CDN URL
-    const output = await youtubedl(videoUrl, {
-      format: 'bestaudio/best',
-      getUrl: true,
-    });
-
-    const audioUrl = output.trim();
-
-    if (!audioUrl) {
-      return res.status(500).json({ error: 'Could not resolve audio URL.' });
+    // Validate the video ID before attempting to stream
+    if (!ytdl.validateID(videoId)) {
+      return res.status(400).json({ error: 'Invalid YouTube video ID.' });
     }
 
-    console.log(`[stream] Resolved audio URL for videoId=${videoId}`);
+    console.log(`[stream] Starting audio stream for videoId=${videoId}`);
 
-    // Step 2: Set response headers before piping
+    // Set response headers
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
-    // Step 3: Pipe the audio from the CDN through this server to the client
-    const cdnReq = https.get(audioUrl, (cdnRes) => {
-      if (cdnRes.statusCode !== 200 && cdnRes.statusCode !== 206) {
-        console.error(`[stream] CDN returned status ${cdnRes.statusCode}`);
-        if (!res.headersSent) res.status(502).json({ error: `CDN returned ${cdnRes.statusCode}` });
-        cdnRes.resume(); // drain so socket is freed
-        return;
-      }
-
-      // Pipe CDN audio bytes directly to the client response
-      cdnRes.pipe(res);
-
-      cdnRes.on('error', (err) => {
-        console.error('[stream] CDN response error:', err.message);
-        if (!res.headersSent) res.status(500).end();
-      });
+    // Create the ytdl audio stream and pipe it to the response
+    const audioStream = ytdl(videoUrl, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
     });
 
-    cdnReq.on('error', (err) => {
-      console.error('[stream] CDN request error:', err.message);
+    // Handle stream errors before piping
+    audioStream.on('error', (err) => {
+      console.error('[stream] ytdl error:', err.message);
       if (!res.headersSent) {
-        res.status(502).json({ error: 'Failed to fetch audio from CDN.', details: err.message });
+        res.status(500).json({ error: 'Failed to stream audio.', details: err.message });
+      } else {
+        res.end();
       }
     });
 
-    // Clean up if the client disconnects early
-    req.on('close', () => cdnReq.destroy());
+    // Clean up if client disconnects early
+    req.on('close', () => {
+      audioStream.destroy();
+      console.log(`[stream] Client disconnected, stream destroyed for videoId=${videoId}`);
+    });
+
+    // Pipe audio stream directly to client
+    audioStream.pipe(res);
 
   } catch (err) {
-    console.error('[stream] yt-dlp error:', err.message);
-    return res.status(500).json({ error: 'Failed to retrieve audio URL.', details: err.message });
+    console.error('[stream] Unexpected error:', err.message);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Unexpected error during streaming.', details: err.message });
+    }
   }
 });
 
