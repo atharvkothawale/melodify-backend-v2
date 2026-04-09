@@ -11,7 +11,12 @@ const PORT = process.env.PORT || 5000;
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 // Allow requests from any origin (useful when your frontend runs on a different port)
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
+
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
